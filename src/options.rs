@@ -50,6 +50,7 @@ impl Options {
         opts.optmulti("t", "type",        "Type of the DNS record being queried (A, MX, NS...)", "TYPE");
         opts.optmulti("n", "nameserver",  "Address of the nameserver to send packets to", "ADDR");
         opts.optmulti("",  "class",       "Network class of the DNS record being queried (IN, CH, HS)", "CLASS");
+        opts.optflag("x", "ptr",          "Simplified reverse lookups, for mapping addresses to names.");
 
         // Sending options
         opts.optopt  ("",  "edns",         "Whether to OPT in to EDNS (disable, hide, show)", "SETTING");
@@ -157,10 +158,23 @@ impl Inputs {
 
     fn load_named_args(&mut self, matches: &getopts::Matches) -> Result<(), OptionsError> {
         for domain in matches.opt_strs("query") {
-            self.add_domain(&domain)?;
+            let addr =  if matches.opt_present("ptr") {
+                match ip_to_ptr_hostname(domain.to_string()) {
+                    Ok(v) => v,
+                    Err(_e) => domain,
+                }
+            } else {
+                domain
+            };
+            self.add_domain(&addr)?;
         }
 
-        for record_name in matches.opt_strs("type") {
+        let types = if matches.opt_present("ptr") {
+           vec![ "PTR".to_string()]
+        } else {
+            matches.opt_strs("type")
+        };
+        for record_name in types {
             if record_name.eq_ignore_ascii_case("OPT") {
                 return Err(OptionsError::QueryTypeOPT);
             }
@@ -504,6 +518,35 @@ impl fmt::Display for OptionsError {
     }
 }
 
+fn ip_to_ptr_hostname(ip: String) -> Result<String, std::net::AddrParseError> {
+    if ip.contains('.') {
+        // should be ipv4
+        let ipv4 = ip.parse::<std::net::Ipv4Addr>()?;
+        let mut octets: Vec<u8> = ipv4.octets().to_vec();
+        octets.reverse();
+        let hostname = octets
+            .into_iter()
+            .map(|i| i.to_string() + ".")
+            .collect::<String>()
+            + "in-addr.arpa.";
+        Ok(hostname)
+    } else {
+        // should be ipv6
+        let ipv6 = ip.parse::<std::net::Ipv6Addr>()?;
+        let octets: Vec<u8> = ipv6.octets().to_vec();
+        let line = octets
+            .into_iter()
+            .map(|i| format!("{i:02x}"))
+            .collect::<String>();
+        let hostname = line
+            .chars()
+            .rev()
+            .map(|i| i.to_string() + ".")
+            .collect::<String>()
+            + "ip6.arpa.";
+        Ok(hostname)
+    }
+}
 
 #[cfg(test)]
 mod test {
